@@ -1,0 +1,19 @@
+# Public HTTPS demo via Cloudflare Tunnel. Run with:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up --build
+# 'frontend' is rebuilt as a static prod build served by Caddy, which also
+# reverse-proxies /api -> backend (single origin, no CORS). cloudflared exposes
+# Caddy over a public https URL (printed in its logs).
+services:
+  frontend:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.web
+      args:
+        VITE_API_URL: /api
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate --url http://frontend:80
+    depends_on:
+      - frontend
+    restart: unless-stopped

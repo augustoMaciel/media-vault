@@ -1,0 +1,17 @@
+:80 {
+    encode gzip
+    handle_path /api/* {
+        reverse_proxy backend:5000
+    }
+    handle {
+        # Gate the app UI behind a shared password for evaluators. (Only the
+        # frontend is gated — /api stays JWT-protected; Basic and Bearer would
+        # otherwise collide on the Authorization header.)
+        basic_auth {
+            evaluator $2b$12$gRP8QYaxC30aERScqqQ26OJiC6496b4keVBjmH9XfvJ1NCDUHhEem
+        }
+        root * /srv
+        file_server
+        try_files {path} /index.html
+    }
+}

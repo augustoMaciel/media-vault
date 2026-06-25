@@ -213,11 +213,10 @@ error feedback, MySQL metadata + MinIO objects, one-command Docker, backend test
 **Implemented (bonus):** streamed downloads, image thumbnails (incl. per-version),
 owner-scoped search, HTTP thumbnail caching (ETag/304), file **versioning**
 (history, per-version download/thumbnail/description, contiguous renumbering on
-delete), MinIO/S3 storage, and expiring presigned links (`/media/{id}/link`, API).
+delete), MinIO/S3 storage, expiring presigned links (`/media/{id}/link`, API), and
+a one-command public **deploy** via Cloudflare Tunnel (see Deploy below).
 
 **Not implemented:**
-- **Deploy** — runs locally via Docker; deploy-ready behind a TLS-terminating
-  reverse proxy (Caddy/Traefik/nginx) or a platform load balancer.
 - **Expiring-link UI button** — the endpoint exists and works; it isn't currently
   surfaced in the redesigned UI.
 - **OTP / 2FA** — intentionally out of scope: not in the test's requirements or
@@ -234,4 +233,41 @@ safety, versioning (incl. renumbering/repointing), and error handling:
 
 ```bash
 docker compose run --rm backend python -m pytest app/tests -q
+```
+
+---
+
+## Deploy (public HTTPS demo — Cloudflare Tunnel)
+
+Run the production stack (static frontend served by Caddy + `/api` reverse proxy)
+and expose it over a free public HTTPS URL — no VPS, domain, or account needed:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up --build
+```
+
+Then grab the URL from the tunnel logs:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml logs cloudflared
+# -> https://<random>.trycloudflare.com
+```
+
+In production the frontend is a static build and the API is served on the same
+origin under `/api` (no CORS). Cloudflare terminates TLS at its edge; the tunnel
+is outbound-only and exposes only the app — not the host, database, or MinIO.
+Stop the stack to take it offline. (Quick tunnels are ephemeral; the URL changes
+on each restart. A stable URL needs a free Cloudflare account + named tunnel.)
+
+**Access gate.** The deployed UI is protected by HTTP Basic auth so only
+evaluators (who have this README) can load it, even if the URL leaks:
+
+- **Username:** `evaluator`  ·  **Password:** `c4gRZ@P1x3lBr33ders!`
+
+Only the frontend is gated; `/api` stays protected by the app's own JWT auth
+(Basic and Bearer would collide on the `Authorization` header). To change the
+password, regenerate a bcrypt hash and replace it in `deploy/Caddyfile`:
+
+```bash
+docker run --rm caddy:2-alpine caddy hash-password --plaintext 'your-new-password'
 ```
