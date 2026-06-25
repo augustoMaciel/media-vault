@@ -1,0 +1,471 @@
+===============================================================================
+ MEDIA VAULT — ARCHITECTURE & FILE STRUCTURE
+===============================================================================
+
+PROJECT
+-------
+A private file manager ("media vault"). Each authenticated user can upload,
+browse, download, and delete ONLY their own files. Answer to the Pixel Breeders
+Junior web-dev test.
+
+- File rules : .png .jpg .jpeg .pdf .txt, max 10MB each.
+- Core rule  : a user can NEVER see or touch another user's files.
+- Auth       : email + strong password + JWT. No email verification, no OTP.
+
+STACK
+-----
+- Frontend : React + TypeScript (Vite)
+- Backend  : Flask (application factory + blueprints)
+- Database : MySQL 8 (SQLAlchemy + PyMySQL)
+- Storage  : MinIO (S3-compatible) — file BYTES live here; DB holds only metadata
+- Auth     : JWT bearer tokens (Flask-JWT-Extended)
+- Infra    : Docker Compose (5 services, one-command startup)
+
+KEY CONCEPTS (the two things most graded)
+-----------------------------------------
+1. METADATA vs OBJECT SPLIT: MySQL stores a row per file (id, owner, name, MIME,
+   size, date, storage_key). MinIO stores the bytes under storage_key. Never put
+   file bytes in the DB.
+2. OWNERSHIP ENFORCEMENT: every Media row has owner_id; every /media route is
+   authenticated and filtered by owner_id. For single-item routes, if the row's
+   owner != current user, return 404 (not 403 — 403 leaks existence).
+
+
+===============================================================================
+ DIRECTORY TREE
+===============================================================================
+
+media-vault/
+├── docker-compose.yml          5 services: db, minio, createbuckets, backend, frontend
+├── .env.example                Config/secrets template (copy to .env)
+├── .gitignore                  Keep secrets & build junk out of git
+├── README.md                   Graded deliverable doc (write last)
+├── STRUCTURE.txt               This file (architecture + build spec)
+├── CLAUDE.md                   Phased, approval-gated build process for Claude Code
+│
+├── minio/
+│   └── createbuckets.sh         One-shot: create the bucket then exit
+│
+├── backend/                     Flask REST API
+│   ├── Dockerfile
+│   ├── .dockerignore
+│   ├── requirements.txt
+│   ├── wsgi.py
+│   ├── migrations/.gitkeep      Flask-Migrate / Alembic target
+│   └── app/
+│       ├── __init__.py          Application factory (wiring)
+│       ├── config.py            Env-driven config, limits, whitelists
+│       ├── extensions.py        db, migrate, jwt, cors singletons
+│       ├── models/              SQLAlchemy tables
+│       │   ├── __init__.py
+│       │   ├── user.py
+│       │   └── media.py
+│       ├── schemas/             marshmallow validation/serialization
+│       │   ├── __init__.py
+│       │   ├── auth.py
+│       │   └── media.py
+│       ├── core/                Cross-cutting helpers
+│       │   ├── __init__.py
+│       │   ├── security.py
+│       │   └── validators.py
+│       ├── services/            External systems (hide the "how")
+│       │   ├── __init__.py
+│       │   ├── storage.py
+│       │   └── thumbnails.py
+│       ├── blueprints/          HTTP routes
+│       │   ├── __init__.py
+│       │   ├── auth.py
+│       │   └── media.py
+│       └── tests/               pytest
+│           ├── __init__.py
+│           ├── conftest.py
+│           ├── test_auth.py
+│           └── test_media.py
+│
+└── frontend/                    React + TypeScript SPA (Vite)
+    ├── Dockerfile
+    ├── .dockerignore
+    ├── package.json
+    ├── tsconfig.json
+    ├── vite.config.ts
+    ├── index.html
+    └── src/
+        ├── main.tsx             Entry: Router + AuthProvider
+        ├── App.tsx              Routes + ProtectedRoute
+        ├── vite-env.d.ts
+        ├── api/                 axios client + endpoint wrappers
+        │   ├── client.ts
+        │   ├── auth.ts
+        │   └── media.ts
+        ├── context/
+        │   └── AuthContext.tsx
+        ├── hooks/
+        │   └── useMedia.ts
+        ├── pages/
+        │   ├── Login.tsx
+        │   ├── Register.tsx
+        │   └── Vault.tsx
+        ├── components/
+        │   ├── ProtectedRoute.tsx
+        │   ├── UploadForm.tsx
+        │   ├── MediaGrid.tsx
+        │   └── MediaCard.tsx
+        └── types/
+            └── index.ts
+
+
+===============================================================================
+ FILE-BY-FILE BUILD NOTES
+===============================================================================
+
+--- ROOT ---------------------------------------------------------------------
+
+docker-compose.yml
+  5 services on one network, persistent volumes; `docker compose up --build`
+  starts everything.
+  - db (mysql:8.0): MYSQL_* env; port 3306; volume mysqldata; healthcheck
+    `mysqladmin ping` with a generous start_period (first boot is slow).
+  - minio (minio/minio): `server /data --console-address ":9001"`; MINIO_ROOT_*;
+    ports 9000 (API) + 9001 (console); volume miniodata; health on
+    /minio/health/live.
+  - createbuckets (minio/mc): depends_on minio healthy; runs createbuckets.sh; exits.
+  - backend (build ./backend): depends_on db+minio healthy; env DATABASE_URL,
+    JWT_SECRET_KEY, MINIO_*; port 5000; cmd runs migrations then serves.
+  - frontend (build ./frontend): depends_on backend; env VITE_API_URL; port 5173.
+  NETWORKING: backend->db/minio use service names; the browser->backend uses
+  localhost:5000 (so VITE_API_URL=http://localhost:5000).
+
+.env.example
+  Documents every env var (MySQL creds, DATABASE_URL=mysql+pymysql://...@db:3306/..,
+  JWT_SECRET_KEY, MINIO_* + bucket, VITE_API_URL). Copy to .env; never commit .env.
+
+.gitignore
+  Ignore .env, __pycache__/, *.pyc, venv/.venv/, .pytest_cache/, node_modules/,
+  dist/, .vite/, OS/editor files. Keep .env.example tracked.
+
+README.md
+  Write LAST. Must contain: one-line description; run steps (cp .env.example .env;
+  docker compose up --build) + URLs; architecture; technical decisions; implemented
+  vs not-implemented (explain omissions); short API table.
+
+--- minio/ -------------------------------------------------------------------
+
+createbuckets.sh
+  mc alias set -> mc mb --ignore-existing local/$MINIO_BUCKET -> keep bucket
+  PRIVATE -> exit 0. Reads MINIO_ROOT_* and MINIO_BUCKET from env.
+
+--- backend root -------------------------------------------------------------
+
+Dockerfile
+  FROM python:3.12-slim; PYTHONUNBUFFERED/DONTWRITEBYTECODE; COPY requirements ->
+  pip install (cache layer) -> COPY source; EXPOSE 5000; CMD `flask db upgrade &&
+  gunicorn -b 0.0.0.0:5000 wsgi:app`. PyMySQL => no system MySQL libs.
+
+.dockerignore
+  Exclude __pycache__/, *.pyc, .pytest_cache/, venv/.venv/, .env.
+
+requirements.txt
+  Flask, Flask-SQLAlchemy, Flask-Migrate, Flask-JWT-Extended, Flask-Cors, PyMySQL,
+  passlib[bcrypt], marshmallow, boto3 (or minio), python-magic (fallback
+  `filetype`), Pillow (only if thumbnails), gunicorn, pytest. Pin on install.
+
+wsgi.py
+  `from app import create_app` then `app = create_app()`. Run as `wsgi:app`.
+
+migrations/.gitkeep
+  Placeholder. `flask db init` generates env.py/alembic.ini/versions/ here.
+
+--- backend/app (core) -------------------------------------------------------
+
+__init__.py
+  Application factory create_app(): Flask() -> load config -> init extensions
+  (db, migrate(app,db), jwt, cors) -> register blueprints (auth at /auth, media
+  at /media) -> optional JSON error handlers (400/401/404/413) + /health ->
+  return app. Keep THIN.
+
+config.py
+  Config class from env: SQLALCHEMY_DATABASE_URI(=DATABASE_URL),
+  TRACK_MODIFICATIONS=False, JWT_SECRET_KEY, JWT_ACCESS_TOKEN_EXPIRES (e.g. 12h),
+  MAX_CONTENT_LENGTH=10MB (auto-413), MINIO_*, ALLOWED_EXTENSIONS{png,jpg,jpeg,
+  pdf,txt}, ALLOWED_MIME_TYPES, PASSWORD_MIN_LENGTH (e.g. 10). Secrets only from env.
+
+extensions.py
+  Unbound singletons: db=SQLAlchemy(); migrate=Migrate(); jwt=JWTManager();
+  cors=CORS(). Factory calls each .init_app(app). Avoids circular imports.
+
+--- backend/app/models -------------------------------------------------------
+
+models/__init__.py
+  Re-export so Alembic sees them: `from .user import User`; `from .media import Media`.
+
+models/user.py
+  User(db.Model): id PK; email (unique, not null, indexed); password_hash (not
+  null, never plaintext); created_at. relationship media -> backref "owner",
+  cascade delete-orphan. to_dict() excludes password_hash. Email is the login id;
+  no verification/OTP fields (out of scope).
+
+models/media.py
+  Media(db.Model) = the file metadata: id PK; owner_id (FK user.id, not null,
+  indexed) <- ownership; title; description (nullable); original_name (not null);
+  storage_key (unique, not null; "<owner>/<uuid>.<ext>"); mime_type; size_bytes;
+  uploaded_at; thumbnail_key (nullable, optional preview bonus). to_dict() returns
+  public-safe shape; don't expose raw storage_key.
+
+--- backend/app/schemas ------------------------------------------------------
+
+schemas/__init__.py
+  Package marker; optionally re-export schemas.
+
+schemas/auth.py
+  RegisterSchema: email (Email, normalized) + password with STRONG-PASSWORD rules
+  (len>=PASSWORD_MIN_LENGTH; lower+upper+digit+symbol; optional common-password
+  blocklist; clear 400). LoginSchema: email+password (no strength check on login).
+  UserResponseSchema: id, email, created_at (never password_hash).
+
+schemas/media.py
+  MediaCreateSchema: title?, description? (the FILE comes from request.files,
+  validated in core/validators.py). MediaResponseSchema: id, title, description,
+  original_name, mime_type, size_bytes, uploaded_at, has_thumbnail. Never leak
+  storage_key or others' owner_id. many=True for the list endpoint.
+  MediaQuerySchema: q? (search term; trimmed; max ~100 chars) for GET /media.
+  Validate/normalize here so the blueprint receives a clean, bounded string.
+
+--- backend/app/core ---------------------------------------------------------
+
+core/__init__.py
+  Package marker.
+
+core/security.py
+  hash_password / verify_password (passlib bcrypt, constant-time);
+  make_token(user_id) (create_access_token); current_user_id() (wrap
+  get_jwt_identity). Never log/return hashes.
+
+core/validators.py
+  validate_upload(file): size<=10MB; extension in ALLOWED_EXTENSIONS; magic-byte
+  sniff (python-magic/filetype) vs ALLOWED_MIME_TYPES (reject renamed files);
+  secure_filename for display but STORE under a UUID key. Returns (mime, size).
+
+--- backend/app/services -----------------------------------------------------
+
+services/__init__.py
+  Package marker. Blueprints call services; services hide storage details.
+
+services/storage.py
+  Only module that talks to MinIO. get_client(); ensure_bucket();
+  build_key(owner_id, ext)="<owner>/<uuid>.<ext>"; put_object (streamed);
+  open_stream(key) (for streamed downloads); delete_object(key);
+  presign_get(key, expires) (optional expiring-links bonus). GOTCHA: presigned
+  URLs embed "minio:9000" (unreachable from browser) — sign with a public
+  endpoint or stream through Flask.
+
+services/thumbnails.py
+  OPTIONAL (preview bonus). make_thumbnail(image_bytes)->bytes via Pillow;
+  None for non-images. On image upload, store under thumbnail_key. If skipped,
+  delete this file + thumbnail_key column and note in README.
+
+--- backend/app/blueprints ---------------------------------------------------
+
+blueprints/__init__.py
+  Package marker; factory imports auth_bp and media_bp.
+
+blueprints/auth.py  (registered at /auth)
+  POST /auth/register: validate (incl. strong password); 409 if email exists;
+    hash + create user; 201 (optionally issue a token to auto-login).
+  POST /auth/login: validate; verify_password; success -> {access_token, user};
+    failure -> 401 generic message.
+  GET /auth/me [@jwt_required]: return current user (frontend session check).
+
+blueprints/media.py  (registered at /media; every route @jwt_required, scoped to user)
+  OWNERSHIP RULE: single-item routes load the row and 404 if owner != current user.
+  SQLi RULE: ALL queries go through the SQLAlchemy ORM with BOUND parameters.
+    Never f-string/format/%/concatenate user input into SQL; never pass it into
+    text() except as :named params. Bound params are transmitted apart from the
+    SQL text, so obfuscation/encoding cannot turn data into SQL.
+  GET    /media[?q=]          list MY media, newest first (many=True). Optional
+                              ?q= filters MY rows only, case-insensitive substring
+                              over title/description/original_name via
+                              ilike(or_(...)). ESCAPE LIKE wildcards (% _ \) so a
+                              user can't inject wildcard semantics; value still
+                              travels as a bound param (SQLi-safe).
+  POST   /media               file + title/description; validate_upload; build_key
+                              + put_object (stream); optional thumbnail; persist
+                              row (owner=me) -> 201. 400 invalid / 413 too large.
+  GET    /media/<id>/download ownership check; STREAM bytes with Content-Type,
+                              Content-Length, Content-Disposition: attachment;
+                              filename="<original_name>". (Bonus alt: presigned URL.)
+  GET    /media/<id>/thumbnail OPTIONAL; ownership check; stream thumb inline; 404 if none.
+  DELETE /media/<id>          ownership check; delete object(s) + row -> 204.
+                              (Physical delete; if soft, add deleted_at + filter.)
+
+--- backend/app/tests --------------------------------------------------------
+
+tests/__init__.py
+  Package marker.
+
+tests/conftest.py
+  Fixtures: app (create_app with TEST config, SQLite in-memory or throwaway MySQL);
+  client; auth_headers (register+login -> Bearer token); mock storage (monkeypatch
+  services/storage to in-memory).
+
+tests/test_auth.py
+  register 201; duplicate 409; invalid email 400; WEAK password 400; STRONG 201;
+  login 200+token; wrong password 401 (generic); /me no-token 401; /me with token
+  200 + no hash leaked.
+
+tests/test_media.py
+  upload each valid type 201; >10MB 413; disallowed/forged type 400; list returns
+  ONLY caller's media (two users); search ?q= returns only MY matching rows (never
+  another user's); a SQLi/obfuscated payload (e.g. "' OR '1'='1", "%", "_") is
+  treated as a literal term -> safe empty/normal result, no 500, DB intact;
+  download own 200 + Content-Disposition;
+  *** download other user's file 404 ***; *** delete other user's file 404 ***;
+  delete own 204 (+ storage.delete called); any route without JWT 401.
+
+--- frontend root ------------------------------------------------------------
+
+Dockerfile
+  DEV: node:20-alpine; COPY package*.json -> npm install; COPY .; EXPOSE 5173;
+  CMD npm run dev -- --host 0.0.0.0. (PROD optional: build -> nginx; document choice.)
+
+.dockerignore
+  Exclude node_modules/, dist/, .vite/, .env, .git.
+
+package.json
+  scripts: dev/build/preview. deps: react, react-dom, react-router-dom, axios.
+  devDeps: typescript, vite, @vitejs/plugin-react, @types/react, @types/react-dom.
+
+tsconfig.json
+  Vite+React TS; strict TRUE; jsx react-jsx; moduleResolution bundler; include ["src"].
+
+vite.config.ts
+  plugins [react()]; server { host:true, port:5173 }. API base from VITE_API_URL.
+
+index.html
+  <head> (charset/viewport/title); <div id="root">; <script module src=/src/main.tsx>.
+
+--- frontend/src -------------------------------------------------------------
+
+main.tsx
+  createRoot(#root).render(<App/>) wrapped in <BrowserRouter> + <AuthProvider>.
+
+App.tsx
+  Routes: /login (public), /register (public), / (ProtectedRoute -> Vault),
+  * (redirect). Optional shared layout/nav with logout.
+
+vite-env.d.ts
+  /// <reference types="vite/client" />; optional typed ImportMetaEnv.VITE_API_URL.
+
+api/client.ts
+  axios instance baseURL=VITE_API_URL; request interceptor attaches
+  Authorization: Bearer <token> from storage (persistent session); response
+  interceptor: on 401 clear token + redirect to /login.
+
+api/auth.ts
+  register(email,password) (may return token or just 201); login(email,password)
+  -> {access_token,user}; me() (restore session on load).
+
+api/media.ts
+  listMedia(q?)->Media[] (sends ?q= when searching); uploadMedia(file, meta,
+  onProgress) multipart (pass axios onUploadProgress for the progress bar);
+  downloadMedia(id) blob -> browser download (or presigned URL); thumbnailUrl(id);
+  deleteMedia(id).
+
+context/AuthContext.tsx
+  Context+provider: { user, loading } and { login, register, logout }. On mount,
+  if token exists call me() to restore the user. Export useAuth(). Document
+  localStorage vs sessionStorage trade-off in README.
+
+hooks/useMedia.ts
+  Returns { media, loading, error, query, setQuery, refresh, upload, remove }.
+  Loads on mount; debounce query -> listMedia(q); upload calls api then
+  refresh/optimistic-add; remove deletes then drops from state; friendly errors.
+
+pages/Login.tsx
+  Controlled email/password; submit -> useAuth().login(); navigate "/" on success;
+  loading + 401 error; link to /register.
+
+pages/Register.tsx
+  email/password (+ optional confirm); live STRONG-PASSWORD feedback mirroring
+  server rules; disable submit until valid; submit -> useAuth().register() ->
+  auto-login or /login; show 409/400 errors; link to /login.
+
+pages/Vault.tsx
+  Main "My Media" page. useMedia(); render a search box (bound to query/setQuery)
+  + <UploadForm onUpload> + <MediaGrid items onDelete>; handle loading (spinner) /
+  error (message+retry) / empty (prompt — distinguish "no media yet" vs "no
+  matches"); header with title + logout.
+
+components/ProtectedRoute.tsx
+  read { user, loading } from useAuth(); loading -> spinner; no user -> Navigate to
+  /login; else render children.
+
+components/UploadForm.tsx
+  <input type=file accept=".png,.jpg,.jpeg,.pdf,.txt"> + optional title/description;
+  client-side pre-checks (size<=10MB, ext); submit -> props.onUpload(file, meta,
+  onProgress); progress bar; states idle/uploading/success/error; surface server
+  validation errors.
+
+components/MediaGrid.tsx
+  props items:Media[], onDelete(id); map -> <MediaCard/>; CSS grid (makes the
+  photo-vault theme demo nicely).
+
+components/MediaCard.tsx
+  props item, onDelete; thumbnail if has_thumbnail else type icon; title/
+  original_name; human-readable size; formatted date; Download + Delete (confirm,
+  pending state); handle broken-thumbnail onError.
+
+types/index.ts
+  User { id, email, createdAt }; Media { id, title, description?, originalName,
+  mimeType, sizeBytes, uploadedAt, hasThumbnail }; AuthResponse { accessToken,
+  user }. If backend is snake_case, map in the api/ layer.
+
+
+===============================================================================
+ BUILD ORDER
+===============================================================================
+ 0. git init; cp .env.example .env; first commit (scaffold).
+ 1. docker-compose.yml + both Dockerfiles -> all 5 services boot (stub apps).
+ 2. Backend foundation: extensions -> config -> models -> __init__ factory ->
+    flask db migrate / upgrade.
+ 3. Auth: core/security -> schemas/auth -> blueprints/auth (register/login/me).
+ 4. Storage: services/storage (MinIO) -> media upload + list with ownership filter.
+ 5. Download (streamed) + delete (object + row).
+ 6. Frontend foundation: api/client -> AuthContext -> Login/Register -> ProtectedRoute.
+ 7. Vault: types -> api/media -> useMedia -> UploadForm (progress) -> MediaGrid/
+    MediaCard (download/delete).
+ 8. Tests (esp. ownership 404) -> polish loading/error UX -> README last.
+ 9. Bonuses (all on the test's list): image preview (thumbnails), streaming
+    download, presigned/expiring links, deploy.
+
+
+===============================================================================
+ SCOPE
+===============================================================================
+ IN  : email + strong password auth (JWT), upload/list/download/delete with
+       per-user isolation, validation, MySQL metadata + MinIO objects, Docker,
+       tests, README. Listed bonuses as time allows.
+ OUT : email verification, OTP/2FA. Considered and intentionally descoped — absent
+       from the test's requirements AND bonus list; the brief favors quality over
+       feature count, and an email-dependent gate would add risk for zero points.
+       Architecture supports adding them later (a services/email.py + a
+       one_time_codes table). State this reasoning in the README.
+
+
+===============================================================================
+ RUBRIC MAPPING
+===============================================================================
+ Auth/authorization      -> blueprints/auth.py, core/security.py, AuthContext.tsx
+ Per-user isolation      -> models/media.py(owner_id), blueprints/media.py(404),
+                            tests/test_media.py
+ Data validation         -> core/validators.py, schemas/*, UploadForm.tsx
+ Search (owner-scoped)   -> blueprints/media.py(?q ilike+escape), schemas/media.py,
+                            hooks/useMedia.ts, pages/Vault.tsx, tests/test_media.py
+ Injection safety        -> ORM bound params everywhere; LIKE wildcard escaping
+ Persistence             -> models/*, MySQL, services/storage.py (MinIO)
+ REST API organization   -> blueprints/ + factory + services split
+ Frontend structure/state-> context/, hooks/, pages/, components/
+ Loading & error UX      -> useMedia.ts, Vault.tsx, UploadForm.tsx
+ Single-command Docker   -> docker-compose.yml
+ README quality          -> README.md
+ Bonuses                 -> services/thumbnails.py, storage.presign_get, deploy
+===============================================================================
