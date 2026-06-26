@@ -8,12 +8,9 @@ def _upload(client, headers, filename, data, **meta):
     return client.post("/media", data=upload_data(filename, data, **meta), headers=headers)
 
 
-def _upload_version(client, headers, media_id, filename, data):
-    return client.post(
-        f"/media/{media_id}/versions",
-        data=upload_data(filename, data),
-        headers=headers,
-    )
+def _new_version(client, headers, media_id):
+    # Manual "+ New version" clones the current version's content (no file).
+    return client.post(f"/media/{media_id}/versions", headers=headers)
 
 
 # --- Upload validation --------------------------------------------------------
@@ -28,6 +25,18 @@ def test_upload_each_valid_type_201(client, auth_headers, samples, key):
     assert body["size_bytes"] == len(data)
     # Images get a thumbnail; pdf/txt do not.
     assert body["has_thumbnail"] is (key in ("png", "jpg"))
+
+
+def test_same_name_upload_becomes_new_version(client, auth_headers, samples):
+    fname, data = samples["png"]
+    first = _upload(client, auth_headers, fname, data).get_json()
+    second = _upload(client, auth_headers, fname, data).get_json()
+    # Same item (not a new file), now with two versions.
+    assert second["id"] == first["id"]
+    versions = client.get(f"/media/{first['id']}/versions", headers=auth_headers).get_json()
+    assert [v["version_no"] for v in versions] == [2, 1]
+    # The list still shows a single item.
+    assert len(client.get("/media", headers=auth_headers).get_json()) == 1
 
 
 def test_upload_forged_type_400(client, auth_headers, samples):
@@ -113,6 +122,13 @@ def test_download_own_file_200_with_disposition(client, auth_headers, samples):
     assert resp.data == txt_bytes()
 
 
+def test_download_sets_nosniff_header(client, auth_headers, samples):
+    up = _upload(client, auth_headers, *samples["txt"]).get_json()
+    resp = client.get(f"/media/{up['id']}/download", headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.headers.get("X-Content-Type-Options") == "nosniff"
+
+
 def test_download_other_users_file_404(client, make_user, samples):
     alice, bob = make_user(), make_user()
     up = _upload(client, alice, *samples["png"]).get_json()
@@ -166,23 +182,24 @@ def test_initial_upload_records_version_1(client, auth_headers, samples):
     assert versions[0]["is_current"] is True
 
 
-def test_add_version_updates_current_snapshot(client, auth_headers, samples):
-    up = _upload(client, auth_headers, "first.png", samples["png"][1]).get_json()
-    assert up["original_name"] == "first.png"
+def test_manual_new_version_clones_current(client, auth_headers):
+    up = _upload(client, auth_headers, "f.txt", b"hello\n").get_json()
 
-    r = _upload_version(client, auth_headers, up["id"], "second.txt", samples["txt"][1])
+    r = _new_version(client, auth_headers, up["id"])
     assert r.status_code == 201
-    assert r.get_json()["original_name"] == "second.txt"  # snapshot repointed to v2
 
     versions = client.get(f"/media/{up['id']}/versions", headers=auth_headers).get_json()
     assert [v["version_no"] for v in versions] == [2, 1]   # newest first
     assert versions[0]["is_current"] is True
     assert versions[1]["is_current"] is False
+    # The clone is byte-identical to the version it copied.
+    assert client.get(f"/media/{up['id']}/versions/2/download", headers=auth_headers).data == b"hello\n"
+    assert client.get(f"/media/{up['id']}/versions/1/download", headers=auth_headers).data == b"hello\n"
 
 
 def test_download_old_version_returns_original_bytes(client, auth_headers):
     up = _upload(client, auth_headers, "f.txt", b"version one\n").get_json()
-    _upload_version(client, auth_headers, up["id"], "f.txt", b"version two\n")
+    _upload(client, auth_headers, "f.txt", b"version two\n")  # same-name re-upload -> v2
 
     cur = client.get(f"/media/{up['id']}/download", headers=auth_headers)
     assert cur.data == b"version two\n"                     # current = v2
@@ -196,14 +213,14 @@ def test_version_routes_reject_other_user(client, make_user, samples):
     alice, bob = make_user(), make_user()
     up = _upload(client, alice, *samples["png"]).get_json()
     assert client.get(f"/media/{up['id']}/versions", headers=bob).status_code == 404
-    assert _upload_version(client, bob, up["id"], "x.txt", b"hi\n").status_code == 404
+    assert _new_version(client, bob, up["id"]).status_code == 404
     assert client.get(f"/media/{up['id']}/versions/1/download", headers=bob).status_code == 404
 
 
 def test_delete_middle_version_renumbers(client, auth_headers):
     up = _upload(client, auth_headers, "f.txt", b"one\n").get_json()
-    _upload_version(client, auth_headers, up["id"], "f.txt", b"two\n")
-    _upload_version(client, auth_headers, up["id"], "f.txt", b"three\n")
+    _upload(client, auth_headers, "f.txt", b"two\n")        # re-upload same name -> v2
+    _upload(client, auth_headers, "f.txt", b"three\n")      # -> v3
     r = client.delete(f"/media/{up['id']}/versions/2", headers=auth_headers)
     assert r.status_code == 200 and r.get_json()["media_deleted"] is False
     assert sorted(v["version_no"] for v in r.get_json()["versions"]) == [1, 2]
@@ -213,7 +230,7 @@ def test_delete_middle_version_renumbers(client, auth_headers):
 
 def test_delete_current_version_repoints(client, auth_headers):
     up = _upload(client, auth_headers, "f.txt", b"one\n").get_json()
-    _upload_version(client, auth_headers, up["id"], "f.txt", b"two\n")
+    _upload(client, auth_headers, "f.txt", b"two\n")        # re-upload same name -> v2
     client.delete(f"/media/{up['id']}/versions/2", headers=auth_headers)
     assert client.get(f"/media/{up['id']}/download", headers=auth_headers).data == b"one\n"
 
@@ -234,7 +251,7 @@ def test_delete_version_other_user_404(client, make_user, samples):
 
 def test_delete_removes_all_version_objects(client, auth_headers, samples, object_store):
     up = _upload(client, auth_headers, *samples["png"]).get_json()        # v1: 2 objects
-    _upload_version(client, auth_headers, up["id"], "v2.png", samples["png"][1])  # v2: +2
+    _new_version(client, auth_headers, up["id"])                          # v2 clone: +2
     assert len(object_store) == 4
 
     assert client.delete(f"/media/{up['id']}", headers=auth_headers).status_code == 204

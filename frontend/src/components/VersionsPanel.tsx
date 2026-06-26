@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import type { MediaVersion } from "../types";
 import Thumb from "./Thumb";
 
@@ -7,7 +7,7 @@ interface Props {
   versions: MediaVersion[];
   selectedVersionNo: number | null;
   onSelectVersion: (v: MediaVersion) => void;
-  onUploadVersion: (file: File) => Promise<void>;
+  onUploadVersion: () => Promise<void>;
   onUpdateDescription: (versionNo: number, description: string) => Promise<void>;
   loading: boolean;
 }
@@ -41,7 +41,6 @@ export default function VersionsPanel({
   const [error, setError] = useState<string | null>(null);
   const [descDraft, setDescDraft] = useState("");
   const [savingDesc, setSavingDesc] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
 
   const selected = versions.find((v) => v.versionNo === selectedVersionNo) ?? null;
 
@@ -59,15 +58,13 @@ export default function VersionsPanel({
     );
   }
 
-  const handleFile = async (file: File | null) => {
-    if (!file) return;
+  const handleNewVersion = async () => {
     setUploading(true);
     setError(null);
     try {
-      await onUploadVersion(file);
-      if (inputRef.current) inputRef.current.value = "";
+      await onUploadVersion();
     } catch {
-      setError("Upload failed — check file type and size.");
+      setError("Couldn't add a version.");
     } finally {
       setUploading(false);
     }
@@ -119,17 +116,9 @@ export default function VersionsPanel({
       </ul>
 
       <div className="version-actions">
-        <label className="browse-btn new-version">
-          {uploading ? "Uploading…" : "+ New version"}
-          <input
-            ref={inputRef}
-            type="file"
-            accept=".png,.jpg,.jpeg,.pdf,.txt"
-            disabled={uploading}
-            onChange={(e) => handleFile(e.target.files?.[0] ?? null)}
-            style={{ display: "none" }}
-          />
-        </label>
+        <button type="button" className="new-version" disabled={uploading} onClick={handleNewVersion}>
+          {uploading ? "Adding…" : "+ New version"}
+        </button>
         <button type="button" disabled={selectedVersionNo === null || savingDesc} onClick={saveDescription}>
           {savingDesc ? "Saving…" : "Save description"}
         </button>

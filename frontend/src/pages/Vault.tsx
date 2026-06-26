@@ -90,16 +90,13 @@ export default function Vault() {
     [runSearch, query, selectMedia]
   );
 
-  const handleUploadVersion = useCallback(
-    async (file: File) => {
-      if (!selectedMedia) return;
-      const updated = await uploadVersion(selectedMedia.id, file);
-      setSelectedMedia(updated);
-      await loadVersions(updated); // reload list + auto-select new current
-      await runSearch(query); // current snapshot changed in results
-    },
-    [selectedMedia, loadVersions, runSearch, query]
-  );
+  const handleUploadVersion = useCallback(async () => {
+    if (!selectedMedia) return;
+    const updated = await uploadVersion(selectedMedia.id);
+    setSelectedMedia(updated);
+    await loadVersions(updated); // reload list + auto-select new current
+    await runSearch(query); // current snapshot changed in results
+  }, [selectedMedia, loadVersions, runSearch, query]);
 
   const handleUpdateVersionDescription = useCallback(
     async (versionNo: number, description: string) => {

@@ -130,18 +130,9 @@ export async function listVersions(id: string): Promise<MediaVersion[]> {
   return data.map(mapVersion);
 }
 
-export async function uploadVersion(
-  id: string,
-  file: File,
-  onProgress?: (percent: number) => void
-): Promise<Media> {
-  const form = new FormData();
-  form.append("file", file);
-  const { data } = await api.post<RawMedia>(`/media/${id}/versions`, form, {
-    onUploadProgress: (e) => {
-      if (onProgress && e.total) onProgress(Math.round((e.loaded * 100) / e.total));
-    },
-  });
+// Manual "+ New version" clones the current version's content (no file upload).
+export async function uploadVersion(id: string): Promise<Media> {
+  const { data } = await api.post<RawMedia>(`/media/${id}/versions`);
   return mapMedia(data);
 }
 

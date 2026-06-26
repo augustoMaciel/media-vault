@@ -68,7 +68,9 @@ def _stream_object(key: str, mimetype: str, disposition: str | None) -> Response
             resp.close()
             resp.release_conn()
 
-    headers = {}
+    # nosniff: never let the browser MIME-sniff a download into something
+    # executable/renderable (defense in depth on top of the attachment disposition).
+    headers = {"X-Content-Type-Options": "nosniff"}
     if disposition:
         headers["Content-Disposition"] = disposition
     return Response(generate(), mimetype=mimetype, headers=headers)
@@ -98,6 +100,16 @@ def _store_file(owner_id: int, file_storage):
     return storage_key, thumb_key, mime, size, safe_name
 
 
+def _read_object(key: str) -> bytes:
+    """Read an entire stored object into memory (bounded by the 10MB cap)."""
+    resp = storage.open_stream(key)
+    try:
+        return b"".join(resp.stream(_STREAM_CHUNK))
+    finally:
+        resp.close()
+        resp.release_conn()
+
+
 @media_bp.get("")
 @jwt_required()
 def list_media():
@@ -122,6 +134,31 @@ def upload_media():
     meta = MediaCreateSchema().load(request.form.to_dict())
     uid = current_user_id()
     storage_key, thumb_key, mime, size, safe_name = _store_file(uid, request.files.get("file"))
+
+    # Re-uploading a file with the same name -> a new version of that file,
+    # not a separate item. (Same-name is treated as "the same file".)
+    existing = Media.query.filter_by(owner_id=uid, original_name=safe_name).first()
+    if existing is not None:
+        next_no = max((v.version_no for v in existing.versions), default=0) + 1
+        existing.versions.append(MediaVersion(
+            version_no=next_no,
+            original_name=safe_name,
+            description=meta["description"],
+            storage_key=storage_key,
+            thumbnail_key=thumb_key,
+            mime_type=mime,
+            size_bytes=size,
+        ))
+        # Repoint the snapshot (and refresh title/description) to the new upload.
+        existing.title = meta["title"]
+        existing.description = meta["description"]
+        existing.storage_key = storage_key
+        existing.thumbnail_key = thumb_key
+        existing.mime_type = mime
+        existing.size_bytes = size
+        existing.uploaded_at = datetime.now(timezone.utc)
+        db.session.commit()
+        return jsonify(_media_out.dump(existing)), 201
 
     media = Media(
         owner_id=uid,
@@ -151,27 +188,39 @@ def upload_media():
 @media_bp.post("/<media_id>/versions")
 @jwt_required()
 def add_version(media_id):
-    """Upload a new version of an existing item (file-versioning bonus)."""
+    """Manually add a version by cloning the current version's content.
+
+    New *content* comes from a same-name re-upload via POST /media; this button
+    just snapshots the current file as the next version.
+    """
     media = _get_owned_or_404(media_id)
     uid = current_user_id()
-    storage_key, thumb_key, mime, size, safe_name = _store_file(uid, request.files.get("file"))
+    ext = os.path.splitext(media.original_name)[1].lstrip(".").lower()
+
+    # Copy the current object (and thumbnail) to fresh keys for the new version.
+    data = _read_object(media.storage_key)
+    new_key = storage.build_key(uid, ext)
+    storage.put_object(new_key, io.BytesIO(data), len(data), media.mime_type)
+
+    new_thumb = None
+    if media.thumbnail_key:
+        tdata = _read_object(media.thumbnail_key)
+        new_thumb = thumbnail_key_for(new_key)
+        storage.put_object(new_thumb, io.BytesIO(tdata), len(tdata), THUMBNAIL_MIME)
 
     next_no = max((v.version_no for v in media.versions), default=0) + 1
     media.versions.append(MediaVersion(
         version_no=next_no,
-        original_name=safe_name,
-        description=media.description,  # carry over the current description
-        storage_key=storage_key,
-        thumbnail_key=thumb_key,
-        mime_type=mime,
-        size_bytes=size,
+        original_name=media.original_name,
+        description=media.description,
+        storage_key=new_key,
+        thumbnail_key=new_thumb,
+        mime_type=media.mime_type,
+        size_bytes=media.size_bytes,
     ))
-    # Repoint the current snapshot at the new version (old objects are retained).
-    media.original_name = safe_name
-    media.storage_key = storage_key
-    media.thumbnail_key = thumb_key
-    media.mime_type = mime
-    media.size_bytes = size
+    # Repoint the snapshot at the clone (old objects retained).
+    media.storage_key = new_key
+    media.thumbnail_key = new_thumb
     media.uploaded_at = datetime.now(timezone.utc)
     db.session.commit()
     return jsonify(_media_out.dump(media)), 201
