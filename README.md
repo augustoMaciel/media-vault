@@ -100,12 +100,13 @@ integer. All `/media` routes and `/auth/me` require `Authorization: Bearer <toke
 | POST   | `/auth/login` | authenticate → `{access_token, user}` |
 | GET    | `/auth/me` | restore session |
 | GET    | `/media[?q=]` | list/search my files (current version) |
-| POST   | `/media` | upload (multipart: file, title*, description) |
+| POST   | `/media` | upload (file, title?, description); re-uploading the same name → a new version |
+| PATCH  | `/media/{id}` | rename (edit the file's title) |
 | GET    | `/media/{id}/download` | stream current version (attachment) |
 | GET    | `/media/{id}/link` | expiring presigned URL |
 | GET    | `/media/{id}/thumbnail` | current thumbnail (ETag/304) |
 | GET    | `/media/{id}/versions` | version history |
-| POST   | `/media/{id}/versions` | upload a new version |
+| POST   | `/media/{id}/versions` | add a version (clones the current one) |
 | PATCH  | `/media/{id}/versions/{n}` | edit a version's description |
 | GET    | `/media/{id}/versions/{n}/download` | download a specific version |
 | GET    | `/media/{id}/versions/{n}/thumbnail` | a version's thumbnail |
@@ -113,7 +114,8 @@ integer. All `/media` routes and `/auth/me` require `Authorization: Bearer <toke
 | DELETE | `/media/{id}` | delete a file and all its versions |
 | GET    | `/health` | liveness |
 
-`*` Title is required (server-enforced).
+Title is optional (defaults to `No Title`); a same-name re-upload keeps the
+existing title unless a new one is given.
 
 ---
 
@@ -136,6 +138,9 @@ integer. All `/media` routes and `/auth/me` require `Authorization: Bearer <toke
 - **Opaque resource IDs** — the API uses a 128-bit random `public_id`, not the
   sequential PK, so resources can't be enumerated. (Defense-in-depth: IDOR is
   already prevented by the per-request ownership 404.)
+- **No MIME sniffing** — every download/thumbnail response sends
+  `X-Content-Type-Options: nosniff`, so a browser can't reinterpret a file as
+  HTML/executable content (defense in depth on top of `attachment`).
 - **Consistent JSON errors** — 400/401/404/413 + a global 500 handler, so even an
   unexpected failure (e.g. storage down) returns parseable JSON, not an HTML page.
 
@@ -228,7 +233,7 @@ a one-command public **deploy** via Cloudflare Tunnel (see Deploy below).
 
 ## Tests
 
-55 backend tests (pytest) cover auth, validation, per-user isolation, injection
+61 backend tests (pytest) cover auth, validation, per-user isolation, injection
 safety, versioning (incl. renumbering/repointing), and error handling:
 
 ```bash
