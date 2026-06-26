@@ -3,7 +3,7 @@ import axios from "axios";
 import type { UploadMeta } from "../api/media";
 
 const ALLOWED_EXT = ["png", "jpg", "jpeg", "pdf", "txt"];
-const MAX_MB = Number(import.meta.env.VITE_MAX_UPLOAD_MB) || 1024;
+const MAX_MB = Number(import.meta.env.VITE_MAX_UPLOAD_MB) || 10;
 const MAX_BYTES = MAX_MB * 1024 * 1024;
 
 interface Props {

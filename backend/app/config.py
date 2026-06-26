@@ -24,9 +24,9 @@ class Config:
     JWT_DECODE_ALGORITHMS = ["HS256"]  # reject anything else (no 'none', no alg confusion)
 
     # --- Upload limits -------------------------------------------------------
-    # Max upload size (MB), env-configurable; default 1 GB. Flask returns 413
-    # automatically when a request body exceeds this.
-    MAX_CONTENT_LENGTH = _bytes_from_mb(int(os.environ.get("MAX_UPLOAD_MB", "1024")))
+    # Max upload size (MB), env-configurable; default 10 MB (the brief's limit).
+    # Flask returns 413 automatically when a request body exceeds this.
+    MAX_CONTENT_LENGTH = _bytes_from_mb(int(os.environ.get("MAX_UPLOAD_MB", "10")))
 
     # --- Object storage (MinIO / S3) -----------------------------------------
     MINIO_ENDPOINT = os.environ.get("MINIO_ENDPOINT", "minio:9000")
