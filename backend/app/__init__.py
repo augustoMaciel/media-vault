@@ -58,7 +58,8 @@ def register_error_handlers(app):
 
     @app.errorhandler(413)
     def too_large(err):
-        return jsonify(error="payload_too_large", message="File exceeds the 10MB limit."), 413
+        mb = app.config["MAX_CONTENT_LENGTH"] // (1024 * 1024)
+        return jsonify(error="payload_too_large", message=f"File exceeds the {mb} MB limit."), 413
 
     @app.errorhandler(ValidationError)
     def validation_error(err):

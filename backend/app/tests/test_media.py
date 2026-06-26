@@ -50,10 +50,16 @@ def test_upload_disallowed_extension_400(client, auth_headers):
     assert resp.status_code == 400
 
 
-def test_upload_over_10mb_413(client, auth_headers):
-    big = b"a" * (10 * 1024 * 1024 + 1)  # valid text, but over the limit
+def test_upload_over_limit_413(client, auth_headers):
+    big = b"a" * (1 * 1024 * 1024 + 1)  # over the test config's 1 MB limit
     resp = _upload(client, auth_headers, "big.txt", big)
     assert resp.status_code == 413
+
+
+def test_upload_pdf_with_active_content_rejected(client, auth_headers):
+    evil = b"%PDF-1.4\n<< /OpenAction << /S /JavaScript /JS (app.alert(1)) >> >>\ntrailer<<>>\n%%EOF\n"
+    resp = _upload(client, auth_headers, "evil.pdf", evil)
+    assert resp.status_code == 400
 
 
 def test_thumbnail_sets_cache_headers_and_304(client, auth_headers, samples):

@@ -3,7 +3,8 @@ import axios from "axios";
 import type { UploadMeta } from "../api/media";
 
 const ALLOWED_EXT = ["png", "jpg", "jpeg", "pdf", "txt"];
-const MAX_BYTES = 10 * 1024 * 1024;
+const MAX_MB = Number(import.meta.env.VITE_MAX_UPLOAD_MB) || 1024;
+const MAX_BYTES = MAX_MB * 1024 * 1024;
 
 interface Props {
   onUpload: (file: File, meta: UploadMeta, onProgress?: (p: number) => void) => Promise<unknown>;
@@ -53,7 +54,7 @@ export default function UploadForm({ onUpload }: Props) {
     }
     if (f.size > MAX_BYTES) {
       setStatus("error");
-      setErrorDetail("File exceeds the 10MB limit.");
+      setErrorDetail(`File exceeds the ${MAX_MB} MB limit.`);
       setFile(null);
       return;
     }

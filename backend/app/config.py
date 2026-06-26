@@ -24,8 +24,9 @@ class Config:
     JWT_DECODE_ALGORITHMS = ["HS256"]  # reject anything else (no 'none', no alg confusion)
 
     # --- Upload limits -------------------------------------------------------
-    # Flask returns 413 automatically when a request body exceeds this.
-    MAX_CONTENT_LENGTH = _bytes_from_mb(10)
+    # Max upload size (MB), env-configurable; default 1 GB. Flask returns 413
+    # automatically when a request body exceeds this.
+    MAX_CONTENT_LENGTH = _bytes_from_mb(int(os.environ.get("MAX_UPLOAD_MB", "1024")))
 
     # --- Object storage (MinIO / S3) -----------------------------------------
     MINIO_ENDPOINT = os.environ.get("MINIO_ENDPOINT", "minio:9000")
@@ -74,3 +75,4 @@ class TestConfig(Config):
     TESTING = True
     SQLALCHEMY_DATABASE_URI = "sqlite:///:memory:"
     JWT_SECRET_KEY = "test-secret-key"
+    MAX_CONTENT_LENGTH = 1 * 1024 * 1024  # 1 MB keeps the 413 test small & fast

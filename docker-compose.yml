@@ -68,6 +68,7 @@ services:
       MINIO_SECURE: ${MINIO_SECURE}
       MINIO_PUBLIC_ENDPOINT: ${MINIO_PUBLIC_ENDPOINT}
       CORS_ORIGINS: ${CORS_ORIGINS}
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-1024}
     ports:
       - "5000:5000"
 
@@ -80,6 +81,7 @@ services:
       - backend
     environment:
       VITE_API_URL: ${VITE_API_URL}
+      VITE_MAX_UPLOAD_MB: ${VITE_MAX_UPLOAD_MB:-1024}
     ports:
       - "5173:5173"
     volumes:

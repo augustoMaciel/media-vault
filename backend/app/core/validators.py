@@ -65,14 +65,27 @@ def _assert_valid_image(file_storage, ext):
         )
 
 
+# PDF tokens that execute code or launch external programs — the common
+# "malicious PDF" vectors. Rejecting them blocks naive attacks.
+# NOTE: defense in depth only. A crafted PDF can hide these inside compressed
+# object streams, so this is not a full PDF malware scanner (which would need a
+# real parser, and parsing untrusted PDFs carries its own risk).
+_PDF_ACTIVE_CONTENT = (b"/JavaScript", b"/JS", b"/Launch")
+
+
 def _assert_valid_pdf(file_storage):
-    """A real PDF begins with the '%PDF-' marker."""
+    """Validate a PDF: '%PDF-' header, '%%EOF' trailer, and no script/launch tokens."""
     stream = file_storage.stream
     stream.seek(0)
-    head = stream.read(5)
+    data = stream.read()
     stream.seek(0)
-    if head != b"%PDF-":
+    if not data.startswith(b"%PDF-"):
         raise BadRequest("File is not a valid PDF.")
+    if b"%%EOF" not in data:
+        raise BadRequest("File is not a complete PDF.")
+    for token in _PDF_ACTIVE_CONTENT:
+        if token in data:
+            raise BadRequest("PDF contains active content (scripts/launch) and was rejected.")
 
 
 def _assert_valid_text(file_storage):
@@ -118,7 +131,7 @@ def validate_upload(file_storage):
     if size == 0:
         raise BadRequest("The file is empty.")
     if size > max_bytes:
-        raise RequestEntityTooLarge("File exceeds the 10MB limit.")
+        raise RequestEntityTooLarge(f"File exceeds the {max_bytes // (1024 * 1024)} MB limit.")
 
     # 3) First-pass sniff of the real type, independent of filename/Content-Type.
     head = file_storage.stream.read(_SNIFF_SIZE)
