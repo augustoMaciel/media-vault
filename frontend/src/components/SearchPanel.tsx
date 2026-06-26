@@ -1,3 +1,4 @@
+import { useEffect, useState, type FormEvent } from "react";
 import type { Media } from "../types";
 import Thumb from "./Thumb";
 
@@ -10,6 +11,7 @@ interface Props {
   error: string | null;
   selectedId: string | null;
   onSelect: (m: Media) => void;
+  onRenameFile: (id: string, title: string) => Promise<void>;
 }
 
 export default function SearchPanel({
@@ -21,7 +23,28 @@ export default function SearchPanel({
   error,
   selectedId,
   onSelect,
+  onRenameFile,
 }: Props) {
+  const selected = results.find((m) => m.id === selectedId) ?? null;
+  const [titleDraft, setTitleDraft] = useState("");
+  const [renaming, setRenaming] = useState(false);
+
+  // Prefill the rename box with the selected file's current title.
+  useEffect(() => {
+    setTitleDraft(selected?.title ?? "");
+  }, [selectedId, selected?.title]);
+
+  const submitRename = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!selectedId) return;
+    setRenaming(true);
+    try {
+      await onRenameFile(selectedId, titleDraft.trim());
+    } finally {
+      setRenaming(false);
+    }
+  };
+
   return (
     <aside className="panel search-panel">
       <h2 className="panel-title">Search</h2>
@@ -61,6 +84,19 @@ export default function SearchPanel({
           </li>
         ))}
       </ul>
+
+      <form className="search-bar rename-bar" onSubmit={submitRename}>
+        <input
+          type="text"
+          placeholder={selectedId ? "Edit title…" : "Select a file to rename"}
+          value={titleDraft}
+          disabled={!selectedId || renaming}
+          onChange={(e) => setTitleDraft(e.target.value)}
+        />
+        <button type="submit" disabled={!selectedId || renaming}>
+          {renaming ? "…" : "Rename"}
+        </button>
+      </form>
     </aside>
   );
 }

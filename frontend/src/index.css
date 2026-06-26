@@ -148,6 +148,7 @@ a { color: var(--accent); }
 /* --- Search + version lists --- */
 .search-bar { display: flex; gap: 0.5rem; margin-bottom: 0.8rem; }
 .search-bar input { flex: 1; min-width: 0; }
+.rename-bar { margin-top: 0.8rem; margin-bottom: 0; }
 .result-list, .version-list {
   list-style: none; margin: 0; padding: 0;
   display: flex; flex-direction: column; gap: 0.4rem;

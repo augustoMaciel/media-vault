@@ -21,6 +21,7 @@ from app.schemas.media import (
     MediaCreateSchema,
     MediaResponseSchema,
     MediaQuerySchema,
+    MediaUpdateSchema,
     MediaVersionResponseSchema,
     MediaVersionUpdateSchema,
 )
@@ -149,8 +150,10 @@ def upload_media():
             mime_type=mime,
             size_bytes=size,
         ))
-        # Repoint the snapshot (and refresh title/description) to the new upload.
-        existing.title = meta["title"]
+        # Repoint the snapshot to the new upload. Keep the old title when none
+        # was given, so re-uploading doesn't wipe the file's title.
+        if meta["title"]:
+            existing.title = meta["title"]
         existing.description = meta["description"]
         existing.storage_key = storage_key
         existing.thumbnail_key = thumb_key
@@ -162,7 +165,7 @@ def upload_media():
 
     media = Media(
         owner_id=uid,
-        title=meta["title"],
+        title=meta["title"] or "No Title",
         description=meta["description"],
         original_name=safe_name,
         storage_key=storage_key,
@@ -183,6 +186,19 @@ def upload_media():
     db.session.add(media)
     db.session.commit()
     return jsonify(_media_out.dump(media)), 201
+
+
+@media_bp.patch("/<media_id>")
+@jwt_required()
+def update_media(media_id):
+    """Edit a media item's title."""
+    media = _get_owned_or_404(media_id)
+    payload = request.get_json(silent=True) or {}
+    data = MediaUpdateSchema().load(payload)
+    if "title" in payload:
+        media.title = data["title"] or "No Title"
+    db.session.commit()
+    return jsonify(_media_out.dump(media)), 200
 
 
 @media_bp.post("/<media_id>/versions")

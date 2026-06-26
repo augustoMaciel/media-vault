@@ -13,9 +13,10 @@ class MediaCreateSchema(Schema):
         unknown = EXCLUDE
 
     title = fields.String(
-        required=True,
-        validate=validate.Length(min=1, max=255),
-        error_messages={"required": "Title is required."},
+        required=False,
+        load_default=None,
+        allow_none=True,
+        validate=validate.Length(max=255),
     )
     description = fields.String(
         required=False,
@@ -31,10 +32,29 @@ class MediaCreateSchema(Schema):
             return data
         out = dict(data)
         if isinstance(out.get("title"), str):
-            out["title"] = out["title"].strip()
+            out["title"] = out["title"].strip() or None
         if isinstance(out.get("description"), str):
             out["description"] = out["description"].strip() or None
         return out
+
+
+class MediaUpdateSchema(Schema):
+    """Editable fields on a media item (title only, for now)."""
+    class Meta:
+        unknown = EXCLUDE
+
+    title = fields.String(
+        required=False, load_default=None, allow_none=True,
+        validate=validate.Length(max=255),
+    )
+
+    @pre_load
+    def clean(self, data, **kwargs):
+        if isinstance(data, dict) and isinstance(data.get("title"), str):
+            out = dict(data)
+            out["title"] = out["title"].strip()
+            return out
+        return data
 
 
 class MediaResponseSchema(Schema):

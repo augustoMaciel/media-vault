@@ -62,14 +62,14 @@ export default function UploadForm({ onUpload }: Props) {
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
-    if (!file || !title.trim()) return;
+    if (!file) return;
     setStatus("uploading");
     setErrorDetail("");
     setProgress(0);
     try {
       await onUpload(
         file,
-        { title: title.trim(), description: description.trim() || undefined },
+        { title: title.trim() || undefined, description: description.trim() || undefined },
         setProgress
       );
       setStatus("success");
@@ -84,7 +84,7 @@ export default function UploadForm({ onUpload }: Props) {
   };
 
   const busy = status === "uploading";
-  const canSubmit = !busy && !!file && title.trim().length > 0;
+  const canSubmit = !busy && !!file;
 
   const msgClass =
     status === "success" ? "upload-msg success"
@@ -117,10 +117,9 @@ export default function UploadForm({ onUpload }: Props) {
         <input
           className="title-input"
           type="text"
-          placeholder="Title (required)"
+          placeholder="Title (optional)"
           value={title}
           disabled={busy}
-          required
           onChange={(e) => setTitle(e.target.value)}
         />
         <button type="submit" disabled={!canSubmit}>Upload</button>

@@ -101,6 +101,11 @@ export async function deleteMedia(id: string): Promise<void> {
   await api.delete(`/media/${id}`);
 }
 
+export async function updateMediaTitle(id: string, title: string): Promise<Media> {
+  const { data } = await api.patch<RawMedia>(`/media/${id}`, { title });
+  return mapMedia(data);
+}
+
 // --- Versioning ---------------------------------------------------------------
 
 interface RawVersion {

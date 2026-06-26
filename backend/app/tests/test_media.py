@@ -258,10 +258,36 @@ def test_delete_removes_all_version_objects(client, auth_headers, samples, objec
     assert object_store == {}                               # all versions' objects gone
 
 
-def test_upload_without_title_400(client, auth_headers, samples):
+def test_upload_without_title_defaults_to_no_title(client, auth_headers, samples):
     fname, data = samples["png"]
     resp = client.post("/media", data=upload_data(fname, data, title=""), headers=auth_headers)
-    assert resp.status_code == 400
+    assert resp.status_code == 201
+    assert resp.get_json()["title"] == "No Title"
+
+
+def test_reupload_without_title_keeps_old_title(client, auth_headers, samples):
+    fname, data = samples["png"]
+    first = client.post("/media", data=upload_data(fname, data, title="Original"), headers=auth_headers).get_json()
+    assert first["title"] == "Original"
+    second = client.post("/media", data=upload_data(fname, data, title=""), headers=auth_headers).get_json()
+    assert second["id"] == first["id"]
+    assert second["title"] == "Original"  # unchanged when no title given
+
+
+def test_update_media_title(client, auth_headers, samples):
+    up = _upload(client, auth_headers, *samples["png"]).get_json()
+    r = client.patch(f"/media/{up['id']}", json={"title": "Renamed"}, headers=auth_headers)
+    assert r.status_code == 200
+    assert r.get_json()["title"] == "Renamed"
+    # blank title falls back to "No Title"
+    r2 = client.patch(f"/media/{up['id']}", json={"title": ""}, headers=auth_headers)
+    assert r2.get_json()["title"] == "No Title"
+
+
+def test_update_media_title_other_user_404(client, make_user, samples):
+    alice, bob = make_user(), make_user()
+    up = _upload(client, alice, *samples["png"]).get_json()
+    assert client.patch(f"/media/{up['id']}", json={"title": "x"}, headers=bob).status_code == 404
 
 
 def test_edit_version_description(client, auth_headers, samples):
@@ -324,6 +350,7 @@ def test_unexpected_error_returns_json_500(client, auth_headers, samples, monkey
 @pytest.mark.parametrize("method,path", [
     ("get", "/media"),
     ("post", "/media"),
+    ("patch", "/media/1"),
     ("get", "/media/1/download"),
     ("get", "/media/1/link"),
     ("get", "/media/1/thumbnail"),

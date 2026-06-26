@@ -9,6 +9,7 @@ import {
   uploadVersion,
   downloadVersion,
   updateVersionDescription,
+  updateMediaTitle,
   deleteMedia,
   deleteVersion,
 } from "../api/media";
@@ -141,6 +142,15 @@ export default function Vault() {
     }
   }, [selectedMedia, selectedVersion, runSearch, query]);
 
+  const handleRenameFile = useCallback(
+    async (id: string, title: string) => {
+      const updated = await updateMediaTitle(id, title);
+      setSelectedMedia((m) => (m && m.id === id ? updated : m));
+      await runSearch(query);
+    },
+    [runSearch, query]
+  );
+
   const handleDownload = useCallback(async () => {
     if (!selectedMedia || !selectedVersion) return;
     setDetailError(null);
@@ -190,6 +200,7 @@ export default function Vault() {
           error={searchError}
           selectedId={selectedMedia?.id ?? null}
           onSelect={selectMedia}
+          onRenameFile={handleRenameFile}
         />
       </div>
     </div>
